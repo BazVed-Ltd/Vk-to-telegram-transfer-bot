@@ -282,44 +282,69 @@ def checkRedirect_vk( msg ):
 
 
 
-def transferMessageToVK(chatid, text, fromUser, attachment):
-
-    if (config.getCell('telegram_SendName')):
-        time = current_time()
-        text = str(fromUser + ': ' + text)
+def transferMessageToVK(chatid, text, fromUser, attachment, message_id, reply_to_message):
 
     randid = random.randint(-9223372036854775808, +9223372036854775807)  # int64
 
-    if attachment is None:
+    # Include the message ID as a hashtag
+    message_tag = f'#msg{message_id}'
 
-        try:
-            module.vk.messages.send(chat_id=config.getCell('t_' + chatid), message=text, random_id=randid)
-        except vk_api.ApiError as error_msg:
-            module.vk.messages.send(user_id=config.getCell('t_' + chatid), message=text, random_id=randid)
-        # print('Сообщение успешно отправлено! ( ' + text + ' )')
-
+    # Handle replies
+    if reply_to_message:
+        reply_message_id = reply_to_message.message_id
+        reply_tag = f'#msg{reply_message_id}'
+        reply_text = f'В ответ на {reply_tag}:\n'
     else:
+        reply_text = ''
 
+    # Construct the message text
+    if (config.getCell('telegram_SendName')):
+        text = f"{reply_text}{fromUser}: {message_tag} {text}"
+    else:
+        text = f"{reply_text}{message_tag} {text}"
+
+    if attachment is None:
+        try:
+            module.vk.messages.send(
+                chat_id=config.getCell('t_' + chatid),
+                message=text,
+                random_id=randid
+            )
+        except vk_api.ApiError as error_msg:
+            module.vk.messages.send(
+                user_id=config.getCell('t_' + chatid),
+                message=text,
+                random_id=randid
+            )
+    else:
+        # Handle attachments (stickers, photos)
         attachment_type = attachment.get('type')
         file_path = attachment.get('file_path')
 
-        file_url = 'https://api.telegram.org/file/bot{0}/{1}'.format(config.getCell('telegram_token'), file_path)
+        file_url = f'https://api.telegram.org/file/bot{config.getCell("telegram_token")}/{file_path}'
 
         if attachment_type == 'sticker':
 
             getSticker = db.checkSticker(file_path)
 
-            # Если стикер не найден в БД
             if getSticker is None:
                 saveSticker(file_url, file_path)
                 getSticker = db.checkSticker(file_path)
 
-            # print(getSticker)
-
             try:
-                module.vk.messages.send(chat_id=config.getCell('t_' + chatid), message="", attachment=getSticker, random_id=randid)
+                module.vk.messages.send(
+                    chat_id=config.getCell('t_' + chatid),
+                    message=text,
+                    attachment=getSticker,
+                    random_id=randid
+                )
             except vk_api.ApiError as error_msg:
-                module.vk.messages.send(user_id=config.getCell('t_' + chatid), message="", attachment=getSticker, random_id=randid)
+                module.vk.messages.send(
+                    user_id=config.getCell('t_' + chatid),
+                    message=text,
+                    attachment=getSticker,
+                    random_id=randid
+                )
 
         elif attachment_type == 'photo':
 
@@ -332,30 +357,38 @@ def transferMessageToVK(chatid, text, fromUser, attachment):
             photo_id = photo[0]['id']
             access_key = photo[0].get('access_key', '')
 
-            vk_attachment = 'photo{}_{}'.format(owner_id, photo_id)
+            vk_attachment = f'photo{owner_id}_{photo_id}'
             if access_key:
-                vk_attachment += '_{}'.format(access_key)
+                vk_attachment += f'_{access_key}'
 
             try:
-                module.vk.messages.send(chat_id=config.getCell('t_' + chatid), message="", attachment=vk_attachment, random_id=randid)
+                module.vk.messages.send(
+                    chat_id=config.getCell('t_' + chatid),
+                    message=text,
+                    attachment=vk_attachment,
+                    random_id=randid
+                )
             except vk_api.ApiError as error_msg:
-                module.vk.messages.send(user_id=config.getCell('t_' + chatid), message="", attachment=vk_attachment, random_id=randid)
+                module.vk.messages.send(
+                    user_id=config.getCell('t_' + chatid),
+                    message=text,
+                    attachment=vk_attachment,
+                    random_id=randid
+                )
 
-            # Удаляем сохраненное изображение после отправки
+            # Remove the saved image after sending
             if os.path.exists(photo_path):
                 os.remove(photo_path)
 
         else:
-            # Обработка других типов вложений
+            # Handle other attachment types if necessary
             pass
 
-    return False
 
-
-def checkRedirect_telegram( chatid, text, fromUser, attachment ):
-	if not config.getCell( 't_' + chatid ) is None:
-		transferMessageToVK( chatid, text, fromUser, attachment )
-		return False
+def checkRedirect_telegram(chatid, text, fromUser, attachment, message_id, reply_to_message):
+    if not config.getCell('t_' + chatid) is None:
+        transferMessageToVK(chatid, text, fromUser, attachment, message_id, reply_to_message)
+        return False
 
 # Посылаем простые сообщения в Telegram
 # Идея: сделать в будущем наклонные столбики, теперь главное не забыть
@@ -368,7 +401,7 @@ def transferMessagesToTelegram( idd, userName, mbody, fwdList, replyId, msgId ):
 		return False
 
 	time = current_time()
-	niceText = str( userName + ': ' + mbody )
+	niceText = str( userName + ' #msg' + msgId + ': ' + mbody )
 
 	if not fwdList is None:
 
@@ -531,15 +564,22 @@ def input_vk():
 
 def listener(messages):
     for m in messages:
-
         if m.content_type == 'text':
 
-            # На команду 'Дай ID' кидает ID чата
+            # On command 'Дай ID', send the chat ID
             if m.text == 'Дай ID':
                 module.bot.send_message(m.chat.id, str(m.chat.id))
                 continue
 
-            checkRedirect_telegram(str(m.chat.id), str(m.text), getUserTName(m.from_user), None)
+            # Pass message_id and reply_to_message to checkRedirect_telegram
+            checkRedirect_telegram(
+                str(m.chat.id),
+                str(m.text),
+                getUserTName(m.from_user),
+                None,
+                m.message_id,
+                m.reply_to_message
+            )
 
         elif m.content_type == 'sticker':
 
@@ -549,7 +589,14 @@ def listener(messages):
             file_info = module.bot.get_file(m.sticker.file_id)
             file_path = file_info.file_path
 
-            checkRedirect_telegram(str(m.chat.id), "", getUserTName(m.from_user), {'file_path': file_path, 'type': 'sticker'})
+            checkRedirect_telegram(
+                str(m.chat.id),
+                "",
+                getUserTName(m.from_user),
+                {'file_path': file_path, 'type': 'sticker'},
+                m.message_id,
+                m.reply_to_message
+            )
 
         elif m.content_type == 'photo':
 
@@ -557,7 +604,15 @@ def listener(messages):
             file_info = module.bot.get_file(file_id)
             file_path = file_info.file_path
 
-            checkRedirect_telegram(str(m.chat.id), "", getUserTName(m.from_user), {'file_path': file_path, 'type': 'photo'})
+            checkRedirect_telegram(
+                str(m.chat.id),
+                "",
+                getUserTName(m.from_user),
+                {'file_path': file_path, 'type': 'photo'},
+                m.message_id,
+                m.reply_to_message
+            )
+
 
 
 def init_telegram():
